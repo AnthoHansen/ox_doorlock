@@ -1,12 +1,12 @@
 --[[ FX Information ]]--
 fx_version   'cerulean'
-use_fxv2_oal 'yes'
+use_experimental_fxv2_oal 'yes'
 lua54        'yes'
 game         'gta5'
 
 --[[ Resource Information ]]--
 name         'ox_doorlock'
-version      '1.3.0'
+version      '1.17.0'
 license      'GPL-3.0-or-later'
 author       'Overextended'
 repository   'https://github.com/overextended/ox_doorlock'
@@ -23,9 +23,7 @@ client_scripts {
 }
 
 server_scripts {
-	'@mysql-async/lib/MySQL.lua',
-	'convert/main.lua',
-	'server/framework.lua',
+	'@oxmysql/lib/MySQL.lua',
 	'server/main.lua',
 }
 
@@ -34,10 +32,20 @@ ui_page 'web/build/index.html'
 files {
 	'web/build/index.html',
 	'web/build/**/*',
-	'locales/*.json'
+	'locales/*.json',
+	'audio/data/oxdoorlock_sounds.dat54.rel',
+	'audio/dlc_oxdoorlock/oxdoorlock.awc',
 }
 
+data_file 'AUDIO_WAVEPACK' 'audio/dlc_oxdoorlock'
+data_file 'AUDIO_SOUNDDATA' 'audio/data/oxdoorlock_sounds.dat'
+
 dependencies {
+	'oxmysql',
 	'ox_lib',
-	'qtarget',
+}
+
+ox_libs {
+    'locale',
+    'table',
 }

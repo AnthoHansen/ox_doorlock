@@ -1,32 +1,39 @@
-lib.locale()
-TriggerServerEvent('ox_doorlock:getDoors')
+if not LoadResourceFile(cache.resource, 'web/build/index.html') then
+	error('Unable to load UI. Build ox_doorlock or download the latest release.\n	^3https://github.com/overextended/ox_doorlock/releases/latest/download/ox_doorlock.zip^0')
+end
+
+if not lib.checkDependency('ox_lib', '3.14.0', true) then return end
 
 local function createDoor(door)
 	local double = door.doors
+	door.zone = GetLabelText(GetNameOfZone(door.coords.x, door.coords.y, door.coords.z))
 
 	if double then
 		for i = 1, 2 do
 			AddDoorToSystem(double[i].hash, double[i].model, double[i].coords.x, double[i].coords.y, double[i].coords.z, false, false, false)
 			DoorSystemSetDoorState(double[i].hash, 4, false, false)
 			DoorSystemSetDoorState(double[i].hash, door.state, false, false)
+
+			if door.doorRate or not door.auto then
+				DoorSystemSetAutomaticRate(double[i].hash, door.doorRate or 10.0, false, false)
+			end
 		end
 	else
 		AddDoorToSystem(door.hash, door.model, door.coords.x, door.coords.y, door.coords.z, false, false, false)
 		DoorSystemSetDoorState(door.hash, 4, false, false)
 		DoorSystemSetDoorState(door.hash, door.state, false, false)
+
+		if door.doorRate or not door.auto then
+			DoorSystemSetAutomaticRate(door.hash, door.doorRate or 10.0, false, false)
+		end
 	end
 end
 
 local nearbyDoors = {}
 local Entity = Entity
 
-RegisterNetEvent('ox_doorlock:setDoors', function(data, sounds)
+lib.callback('ox_doorlock:getDoors', false, function(data)
 	doors = data
-
-	SendNUIMessage({
-		action = 'setSoundFiles',
-		data = sounds
-	})
 
 	for _, door in pairs(data) do
 		createDoor(door)
@@ -42,8 +49,8 @@ RegisterNetEvent('ox_doorlock:setDoors', function(data, sounds)
 
 			if double then
 				if door.distance < 80 then
-					if not double[1].entity and IsModelValid(double[1].model) and IsModelValid(double[2].model) then
-						for i = 1, 2 do
+					for i = 1, 2 do
+						if not double[i].entity and IsModelValid(double[i].model) then
 							local entity = GetClosestObjectOfType(double[i].coords.x, double[i].coords.y, double[i].coords.z, 1.0, double[i].model, false, false, false)
 
 							if entity ~= 0 then
@@ -56,7 +63,7 @@ RegisterNetEvent('ox_doorlock:setDoors', function(data, sounds)
 					if door.distance < 20 then
 						nearbyDoors[#nearbyDoors + 1] = door
 					end
-				elseif double[1].entity then
+				else
 					for i = 1, 2 do
 						double[i].entity = nil
 					end
@@ -78,13 +85,13 @@ RegisterNetEvent('ox_doorlock:setDoors', function(data, sounds)
 							GetOffsetFromEntityInWorldCoords(entity, max.x, max.y, min.z).xy
 						}
 
-						local centroid = vec(0, 0)
+						local centroid = vec2(0, 0)
 
 						for i = 1, 8 do
 							centroid += points[i]
 						end
 
-						centroid /= 8
+						centroid = centroid / 8
 						door.coords = vec3(centroid.x, centroid.y, door.coords.z)
 						door.entity = entity
 						Entity(entity).state.doorId = door.id
@@ -104,12 +111,21 @@ RegisterNetEvent('ox_doorlock:setDoors', function(data, sounds)
 end)
 
 RegisterNetEvent('ox_doorlock:setState', function(id, state, source, data)
+	if not doors then return end
+
 	if data then
 		doors[id] = data
 		createDoor(data)
+
+		if NuiHasLoaded then
+			SendNuiMessage(json.encode({
+				action = 'updateDoorData',
+				data = data
+			}))
+		end
 	end
 
-	if source == cache.serverId then
+	if Config.Notify and source == cache.serverId then
 		if state == 0 then
 			lib.notify({
 				type = 'success',
@@ -130,81 +146,144 @@ RegisterNetEvent('ox_doorlock:setState', function(id, state, source, data)
 	door.state = state
 
 	if double then
-		while not door.auto and door.state == 1 and double[1].entity do
-			local doorOneHeading = double[1].heading
-			local doorOneCurrentHeading = math.floor(GetEntityHeading(double[1].entity) + 0.5)
-
-			if doorOneHeading == doorOneCurrentHeading then
-				DoorSystemSetDoorState(double[1].hash, door.state, false, false)
-			end
-
-			local doorTwoHeading = double[2].heading
-			local doorTwoCurrentHeading = math.floor(GetEntityHeading(double[2].entity) + 0.5)
-
-			if doorTwoHeading == doorTwoCurrentHeading then
-				DoorSystemSetDoorState(double[2].hash, door.state, false, false)
-			end
-
-			if doorOneHeading == doorOneCurrentHeading and doorTwoHeading == doorTwoCurrentHeading then break end
-			Wait(0)
-		end
-
-		if door.state ~= state then return end
-
 		DoorSystemSetDoorState(double[1].hash, door.state, false, false)
 		DoorSystemSetDoorState(double[2].hash, door.state, false, false)
-	else
-		while not door.auto and door.state == 1 and door.entity do
-			local heading = math.floor(GetEntityHeading(door.entity) + 0.5)
-			if heading == door.heading then break end
-			Wait(0)
+
+		if door.holdOpen then
+			DoorSystemSetHoldOpen(double[1].hash, door.state == 0)
+			DoorSystemSetHoldOpen(double[2].hash, door.state == 0)
 		end
 
-		if door.state ~= state then return end
-
+		while door.state == 1 and (not IsDoorClosed(double[1].hash) or not IsDoorClosed(double[2].hash)) do Wait(0) end
+	else
 		DoorSystemSetDoorState(door.hash, door.state, false, false)
+
+		if door.holdOpen then DoorSystemSetHoldOpen(door.hash, door.state == 0) end
+		while door.state == 1 and not IsDoorClosed(door.hash) do Wait(0) end
 	end
 
-	if door.distance and door.distance < 20 then
-		local volume = (0.01 * GetProfileSetting(300)) / (door.distance / 2)
-		if volume > 1 then volume = 1 end
-		local sound = state == 0 and door.unlockSound or door.lockSound or 'door-bolt-4'
+	if door.state == state and door.distance and door.distance < 20 then
+		if Config.NativeAudio then
+			RequestScriptAudioBank('dlc_oxdoorlock/oxdoorlock', false)
+			local sound = state == 0 and door.unlockSound or door.lockSound or 'door_bolt'
+			local soundId = GetSoundId()
 
-		SendNUIMessage({
-			action = 'playSound',
-			data = {
-				sound = sound,
-				volume = volume
-			}
-		})
+			PlaySoundFromCoord(soundId, sound, door.coords.x, door.coords.y, door.coords.z, 'DLC_OXDOORLOCK_SET', false, 0, false)
+			ReleaseSoundId(soundId)
+			ReleaseNamedScriptAudioBank('dlc_oxdoorlock/oxdoorlock')
+		else
+			local volume = (0.01 * GetProfileSetting(300)) / (door.distance / 2)
+			if volume > 1 then volume = 1 end
+			local sound = state == 0 and door.unlockSound or door.lockSound or 'door-bolt-4'
+
+			SendNUIMessage({
+				action = 'playSound',
+				data = {
+					sound = sound,
+					volume = volume
+				}
+			})
+		end
 	end
 end)
 
 RegisterNetEvent('ox_doorlock:editDoorlock', function(id, data)
+	if source == '' then return end
+
 	local door = doors[id]
+	local double = door.doors
+	local doorState = data and data.state or 0
 
-	if not data then
-		local double = door.doors
+	if data then
+		data.zone = door.zone or GetLabelText(GetNameOfZone(door.coords.x, door.coords.y, door.coords.z))
 
-		if double and double[1].entity then
-			Entity(double[1].entity).state.doorId = nil
-			Entity(double[2].entity).state.doorId = nil
-			DoorSystemSetDoorState(double[1].hash, 0, false, false)
-			DoorSystemSetDoorState(double[2].hash, 0, false, false)
-		elseif door.entity then
-			Entity(door.entity).state.doorId = nil
+		-- hacky method to resolve a bug with "closest door" by forcing a distance recalculation
+		if door.distance < 20 then door.distance = 80 end
+	elseif ClosestDoor?.id == id then
+		ClosestDoor = nil
+	end
+
+	if double then
+		for i = 1, 2 do
+			local doorHash = double[i].hash
+
+			if data then
+				if data.doorRate or door.doorRate or not data.auto then
+					DoorSystemSetAutomaticRate(doorHash, data.doorRate or door.doorRate and 0.0 or 10.0, false, false)
+				end
+
+				DoorSystemSetDoorState(doorHash, doorState, false, false)
+
+				if data.holdOpen then DoorSystemSetHoldOpen(doorHash, doorState == 0) end
+			else
+				DoorSystemSetDoorState(doorHash, 4, false, false)
+				DoorSystemSetDoorState(doorHash, 0, false, false)
+
+				if double[i].entity then
+					Entity(double[i].entity).state.doorId = nil
+				end
+			end
+		end
+	else
+		if data then
+			if data.doorRate or door.doorRate or not data.auto then
+				DoorSystemSetAutomaticRate(door.hash, data.doorRate or door.doorRate and 0.0 or 10.0, false, false)
+			end
+
+			DoorSystemSetDoorState(door.hash, doorState, false, false)
+
+			if data.holdOpen then DoorSystemSetHoldOpen(door.hash, doorState == 0) end
+		else
+			DoorSystemSetDoorState(door.hash, 4, false, false)
 			DoorSystemSetDoorState(door.hash, 0, false, false)
+
+			if door.entity then
+				Entity(door.entity).state.doorId = nil
+			end
 		end
 	end
 
 	doors[id] = data
+
+	if NuiHasLoaded then
+		SendNuiMessage(json.encode({
+			action = 'updateDoorData',
+			data = data or id
+		}))
+	end
 end)
 
+ClosestDoor = nil
+
+lib.callback.register('ox_doorlock:inputPassCode', function()
+	return ClosestDoor?.passcode and lib.inputDialog(locale('door_lock'), {
+		{
+			type = 'input',
+			label = locale('passcode'),
+			password = true,
+			icon = 'lock'
+		},
+	})?[1]
+end)
+
+local lastTriggered = 0
+
+local function useClosestDoor()
+	if not ClosestDoor then return false end
+
+	local gameTimer = GetGameTimer()
+
+	if gameTimer - lastTriggered > 500 then
+		lastTriggered = gameTimer
+		TriggerServerEvent('ox_doorlock:setState', ClosestDoor.id, ClosestDoor.state == 1 and 0 or 1)
+	end
+end
+
+exports('useClosestDoor', useClosestDoor)
+
 CreateThread(function()
-	local lastTriggered = 0
 	local lockDoor = locale('lock_door')
 	local unlockDoor = locale('unlock_door')
-	local closestDoor
 	local showUI
 	local drawSprite = Config.DrawSprite
 
@@ -234,8 +313,8 @@ CreateThread(function()
 				local door = nearbyDoors[i]
 
 				if door.distance < door.maxDistance then
-					if door.distance < (closestDoor?.distance or 10) then
-						closestDoor = door
+					if door.distance < (ClosestDoor?.distance or 10) then
+						ClosestDoor = door
 					end
 
 					if drawSprite and not door.hideUi then
@@ -249,36 +328,16 @@ CreateThread(function()
 					end
 				end
 			end
-		else closestDoor = nil end
+		else ClosestDoor = nil end
 
-		if closestDoor and closestDoor.distance < closestDoor.maxDistance then
-			if Config.DrawTextUI then
-				if closestDoor.state == 0 and showUI ~= 0 and not closestDoor.hideUi then
-					lib.showTextUI(lockDoor)
-					showUI = 0
-				elseif closestDoor.state == 1 and showUI ~= 1 and not closestDoor.hideUi then
-					lib.showTextUI(unlockDoor)
-					showUI = 1
-				end
+		if ClosestDoor and ClosestDoor.distance < ClosestDoor.maxDistance then
+			if Config.DrawTextUI and not ClosestDoor.hideUi and ClosestDoor.state ~= showUI then
+				lib.showTextUI(ClosestDoor.state == 0 and lockDoor or unlockDoor)
+				showUI = ClosestDoor.state
 			end
 
-			if IsDisabledControlJustReleased(0, 38) then
-				if closestDoor.passcode then
-					local input = lib.inputDialog(locale('door_lock'), {
-						{ type = "input", label = locale("passcode"), password = true, icon = 'lock' },
-					})
-
-					if input then
-						TriggerServerEvent('ox_doorlock:setState', closestDoor.id, closestDoor.state == 1 and 0 or 1, false, input[1])
-					end
-				else
-					local gameTimer = GetGameTimer()
-
-					if gameTimer - lastTriggered > 500 then
-						lastTriggered = gameTimer
-						TriggerServerEvent('ox_doorlock:setState', closestDoor.id, closestDoor.state == 1 and 0 or 1)
-					end
-				end
+			if not PickingLock and IsDisabledControlJustReleased(0, 38) then
+				useClosestDoor()
 			end
 		elseif showUI then
 			lib.hideTextUI()
